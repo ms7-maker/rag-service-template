@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# Локальные данные и индексы (не публикуются)
+assistant_api/data/*
+!assistant_api/data/.gitkeep
+assistant_api/faiss_db/
+assistant_api/*.db
+assistant_api/chroma_db/
+assistant_api/api_rag_cache.db
