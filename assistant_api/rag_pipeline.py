@@ -10,6 +10,9 @@ from openai import OpenAI
 from vector_store import VectorStore
 from cache import RAGCache
 from data_paths import load_documents_from_data
+from prompts import SYSTEM_MESSAGE, build_rag_prompt
+from routing import route_query
+from fallback import should_fallback, get_fallback_response
 
 
 class RAGPipeline:
@@ -61,42 +64,6 @@ class RAGPipeline:
         
         print("RAG Pipeline инициализирован (API mode)")
     
-    def _create_prompt(self, query: str, context_docs: List[Dict[str, Any]]) -> str:
-        """
-        Создание промпта для LLM с контекстом.
-        
-        Args:
-            query: вопрос пользователя
-            context_docs: релевантные документы из векторного хранилища
-            
-        Returns:
-            сформированный промпт
-        """
-        # Формирование контекста из документов
-        context_parts = []
-        for i, doc in enumerate(context_docs, 1):
-            context_parts.append(f"Документ {i}:\n{doc['text']}\n")
-        
-        context = "\n".join(context_parts)
-        
-        # Создание промпта
-        prompt = f"""Ты - полезный AI ассистент. Ответь на вопрос пользователя на основе предоставленного контекста.
-
-Контекст:
-{context}
-
-Вопрос: {query}
-
-Инструкции:
-- Отвечай только на основе предоставленного контекста
-- Если в контексте нет информации для ответа, скажи об этом
-- Будь точным и кратким
-- Отвечай на русском языке
-
-Ответ:"""
-        
-        return prompt
-    
     def _generate_answer(self, prompt: str) -> str:
         """
         Генерация ответа через OpenAI API.
@@ -110,7 +77,7 @@ class RAGPipeline:
         response = self.openai_client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": "Ты - полезный AI ассистент, который отвечает на вопросы на основе предоставленного контекста."},
+                {"role": "system", "content": SYSTEM_MESSAGE},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3,  # Низкая температура для более точных ответов
@@ -140,6 +107,9 @@ class RAGPipeline:
         print(f"\n{'='*60}")
         print(f"Запрос: {user_query}")
         print(f"{'='*60}")
+
+        route = route_query(user_query)
+        print(f"[*] Маршрут: {route['route']}")
         
         # Шаг 1: Проверка кеша
         if use_cache:
@@ -162,10 +132,15 @@ class RAGPipeline:
         print("[*] Поиск релевантных документов через API...")
         context_docs = self.vector_store.search(user_query, top_k=3)
         print(f"[+] Найдено {len(context_docs)} релевантных документов")
+
+        if should_fallback(context_docs):
+            fallback_result = get_fallback_response(user_query, context_docs)
+            if fallback_result:
+                return fallback_result
         
         # Шаг 3: Формирование промпта
         print("[*] Формирование промпта...")
-        prompt = self._create_prompt(user_query, context_docs)
+        prompt = build_rag_prompt(user_query, context_docs)
         
         # Шаг 4: Генерация ответа через API
         print(f"[*] Генерация ответа через OpenAI API ({self.model})...")
@@ -185,7 +160,8 @@ class RAGPipeline:
             "from_cache": False,
             "context_docs": context_docs,
             "model": self.model,
-            "mode": "API"
+            "mode": "API",
+            "route": route["route"],
         }
     
     def get_stats(self) -> Dict[str, Any]:
